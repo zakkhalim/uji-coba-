@@ -1,12 +1,13 @@
-# uji-coba-
-apaajah
-[pustakawan-ai (4).html](https://github.com/user-attachments/files/35191565/pustakawan-ai.4.html)
+[Uploading index.html…]()
 <!DOCTYPE html>
 <html lang="id">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pustakawan AI — Katalog Perpustakaan</title>
+<meta name="description" content="Pustakawan AI: katalog perpustakaan untuk mencari buku, lokasi lantai dan rak, serta informasi buku.">
+<meta name="theme-color" content="#152218">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%9A%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,600;0,700;1,500&family=Source+Sans+3:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1469,16 +1470,66 @@ function tambahRekomendasi(idList){
   aiMessages.scrollTop = aiMessages.scrollHeight;
 }
 
-function pencarianLokalFallback(q){
-  const kata = q.toLowerCase();
-  const cocok = BUKU.filter(b => (b.judul+" "+b.penulis+" "+b.genre+" "+b.sinopsis).toLowerCase().includes(kata) ||
-    kata.split(/\s+/).some(k => k.length > 3 && (b.judul+" "+b.genre+" "+b.sinopsis).toLowerCase().includes(k)));
-  if(cocok.length === 0){
-    return {jawaban: "Belum menemukan buku yang cocok dengan pertanyaan itu di katalog. Coba gunakan kata kunci lain, misalnya genre atau nama penulis.", rekomendasi_id: []};
+/* ---------- Konfigurasi asisten AI ----------
+   GitHub Pages hanya menyajikan file statis, dan API key tidak boleh ditaruh di kode browser.
+   - ENDPOINT_AI kosong  -> asisten memakai pencarian lokal (tanpa internet, tanpa API key).
+   - ENDPOINT_AI diisi   -> alamat proxy/serverless milikmu sendiri (mis. Cloudflare Worker) yang
+     menerima body berformat Anthropic /v1/messages, menambahkan API key di sisi server,
+     lalu meneruskan jawabannya apa adanya. */
+const KONFIG = { ENDPOINT_AI: "" };
+
+(function(){
+  const hint = document.querySelector('.ai-hint');
+  if(hint && !KONFIG.ENDPOINT_AI){
+    hint.textContent = "Mode pencarian lokal: jawaban disusun dari data katalog di halaman ini.";
   }
-  const teratas = cocok.slice(0,3);
-  const daftarTeks = teratas.map(b => `"${b.judul}" (${b.penulis}) di Lantai ${b.lantai}, Rak ${b.rak}`).join("; ");
-  return {jawaban: `Berdasarkan katalog, ini beberapa buku yang relevan: ${daftarTeks}.`, rekomendasi_id: teratas.map(b => b.id)};
+})();
+
+const KATA_ABAIKAN = new Set(["ada","adakah","buku","novel","tentang","yang","dan","di","mana","dimana","apa","apakah",
+  "untuk","saya","aku","kamu","dengan","dari","ke","itu","ini","cari","carikan","tolong","bisa","bagaimana","lokasi",
+  "rak","lantai","punya","judul","karya","penulis","oleh","atau","sebuah","para","bagi","pada","akan","ingin","mau",
+  "rekomendasi","rekomendasikan","koleksi","perpustakaan","tersedia","dipinjam","pinjam","ceritakan","lebih","lanjut",
+  "menemukan","bisakah","sedang","sudah","belum","juga","lagi","dong","ya","nih","the","of","and"]);
+
+function normalisasi(s){
+  return String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g," ").trim();
+}
+function tokenisasi(s){
+  return normalisasi(s).split(" ").filter(k => k.length > 2 && !KATA_ABAIKAN.has(k));
+}
+function ringkasStatus(b){
+  return b.status === "tersedia"
+    ? `tersedia (${b.eksemplar.tersedia} dari ${b.eksemplar.total} eksemplar)`
+    : `sedang dipinjam${b.kembali ? ", perkiraan kembali " + b.kembali : ""}`;
+}
+
+function pencarianLokalFallback(q){
+  const token = tokenisasi(q);
+  const qNorm = normalisasi(q);
+  const skor = BUKU.map(b => {
+    const j = normalisasi(b.judul), p = normalisasi(b.penulis), g = normalisasi(b.genre), s = normalisasi(b.sinopsis);
+    let n = 0;
+    if(qNorm.length > 3 && j.includes(qNorm)) n += 6;
+    token.forEach(t => {
+      if(j.includes(t)) n += 3;
+      if(p.includes(t)) n += 3;
+      if(g.includes(t)) n += 2;
+      if(s.includes(t)) n += 1;
+    });
+    return {b, n};
+  }).filter(x => x.n > 0).sort((a, c) => c.n - a.n);
+
+  if(skor.length === 0){
+    return {jawaban: "Belum menemukan buku yang cocok di katalog. Coba gunakan judul, nama penulis, atau genre, misalnya \"Tere Liye\" atau \"fiksi ilmiah\".", rekomendasi_id: []};
+  }
+  const teratas = skor.slice(0, 4).map(x => x.b);
+  const utama = teratas[0];
+  let jawaban = `"${utama.judul}" karya ${utama.penulis} ada di Lantai ${utama.lantai} (${utama.area}), Rak ${utama.rak}, ${ringkasStatus(utama)}.`;
+  if(teratas.length > 1){
+    jawaban += " Buku lain yang relevan: " +
+      teratas.slice(1, 3).map(b => `"${b.judul}" (Lt.${b.lantai}, Rak ${b.rak})`).join("; ") + ".";
+  }
+  return {jawaban, rekomendasi_id: teratas.map(b => b.id)};
 }
 
 async function kirimPertanyaan(preset){
@@ -1493,12 +1544,23 @@ async function kirimPertanyaan(preset){
   aiMessages.appendChild(typingEl);
   aiMessages.scrollTop = aiMessages.scrollHeight;
 
+  const tampilkan = (hasil) => {
+    typingEl.remove();
+    tambahPesan(hasil.jawaban || "Maaf, belum ada jawaban yang bisa diberikan.", "ai");
+    tambahRekomendasi(hasil.rekomendasi_id);
+  };
+
+  // Tanpa endpoint: langsung pakai pencarian lokal.
+  if(!KONFIG.ENDPOINT_AI){
+    setTimeout(() => { tampilkan(pencarianLokalFallback(pertanyaan)); aiSend.disabled = false; }, 250);
+    return;
+  }
+
   const katalogRingkas = BUKU.map(b => ({
-    id:b.id, judul:b.judul, penulis:b.penulis, tahun:b.tahun, genre:b.genre,
+    id:b.id, judul:b.judul, penulis:b.penulis, tahun:b.tahun || null, genre:b.genre,
     lantai:b.lantai, area:b.area, rak:b.rak, status:b.status,
     kembali: b.kembali || null, sinopsis:b.sinopsis
   }));
-
   const systemPrompt = `Kamu adalah pustakawan AI ramah di sebuah perpustakaan. Kamu HANYA boleh menjawab berdasarkan data katalog berikut, jangan mengarang buku atau lokasi yang tidak ada di data ini:
 ${JSON.stringify(katalogRingkas)}
 
@@ -1508,33 +1570,25 @@ Balas HANYA dalam format JSON valid tanpa markdown, tanpa teks lain, persis sepe
 rekomendasi_id berisi 0 sampai 3 id buku dari data di atas yang paling relevan dengan pertanyaan.`;
 
   try{
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch(KONFIG.ENDPOINT_AI, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
         max_tokens: 1000,
         system: systemPrompt,
         messages: [{role:"user", content: pertanyaan}]
       })
     });
+    if(!response.ok) throw new Error("HTTP " + response.status);
     const data = await response.json();
     let teksMentah = (data.content || []).map(c => c.text || "").join("").trim();
     teksMentah = teksMentah.replace(/```json|```/g, "").trim();
     let hasil;
-    try{
-      hasil = JSON.parse(teksMentah);
-    }catch(e){
-      hasil = pencarianLokalFallback(pertanyaan);
-    }
-    typingEl.remove();
-    tambahPesan(hasil.jawaban || "Maaf, belum ada jawaban yang bisa diberikan.", "ai");
-    tambahRekomendasi(hasil.rekomendasi_id);
+    try{ hasil = JSON.parse(teksMentah); }
+    catch(e){ hasil = pencarianLokalFallback(pertanyaan); }
+    tampilkan(hasil);
   }catch(err){
-    typingEl.remove();
-    const fallback = pencarianLokalFallback(pertanyaan);
-    tambahPesan(fallback.jawaban, "ai");
-    tambahRekomendasi(fallback.rekomendasi_id);
+    tampilkan(pencarianLokalFallback(pertanyaan));
   }finally{
     aiSend.disabled = false;
   }
